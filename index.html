@@ -518,23 +518,31 @@ async function renderShowsWatchlist(seg){
       const show = t[r.id];
       if (r.err) return '';
       const pct = r.aired.length ? Math.round(r.watchedAired / r.aired.length * 100) : 0;
+      const badge = r.next ? `<span class="badge gold">${epLabel(r.next.s, r.next.e)}</span>`
+        : (r.upcoming.length ? `<span class="badge">${relDay(r.upcoming[0].air)}</span>` : '');
       return `<button class="pcard" onclick="openShow(${r.id})">${posterEl(show.poster)}
-        ${r.next ? `<span class="badge gold">${epLabel(r.next.s, r.next.e)}</span>` : ''}
+        ${badge}
         <div class="pname">${esc(show.name)}</div>
         <div class="psub">${r.watchedAired}/${r.aired.length} · ${pct}%</div>
         <div class="prog" style="margin-top:5px"><i style="width:${pct}%"></i></div></button>`;
     };
-    const secCW = (key, title, list) => {
+    const secCW = (key, title, list, def) => {
       if (!list.length) return '';
-      const v = viewOf(key, 'list');
+      const v = viewOf(key, def);
       const body = v === 'list' ? list.map(cwCard).join('') : `<div class="grid">${list.map(cwTile).join('')}</div>`;
       return `<div class="section"><div class="sec-title">${title}
-        <span class="right"><span class="sub">${list.length}</span>${viewBtn(key, 'list')}</span></div>${body}</div>`;
+        <span class="right"><span class="sub">${list.length}</span>${viewBtn(key, def)}</span></div>${body}</div>`;
     };
-    const active = rows.filter(r => !isStale(r));
+    /* Caught-up ongoing shows get their own compact shelf; they rejoin
+       Watching automatically the day a new episode airs. */
+    const isCaughtUp = r => !r.err && !r.next;
+    const active = rows.filter(r => !isCaughtUp(r) && !isStale(r));
     const stale = rows.filter(isStale).sort((a,b) => lastActivity(a.id) - lastActivity(b.id));
-    watchingHTML += secCW('sh.watching', 'Watching', active);
-    watchingHTML += secCW('sh.stale', "😴 Haven't watched for a while", stale);
+    const caught = rows.filter(isCaughtUp).sort((a,b) =>
+      ((a.upcoming[0] || {}).air || '9999') < ((b.upcoming[0] || {}).air || '9999') ? -1 : 1);
+    watchingHTML += secCW('sh.watching', 'Watching', active, 'list');
+    watchingHTML += secCW('sh.stale', "😴 Haven't watched for a while", stale, 'list');
+    watchingHTML += secCW('sh.uptodate', '✅ Up to date', caught, 'tiles');
   }
   let html = seg + watchingHTML;
   const gridSec = (key, title, list) => {
