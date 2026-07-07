@@ -335,6 +335,17 @@ function setWatched(showId, codes, on){
   if (set.size) P().watchedEpisodes[showId] = [...set]; else delete P().watchedEpisodes[showId];
   save();
 }
+/* Watching an episode of a planned/completed/dropped show pulls it back into Watching
+   (auto-complete may immediately override for a finished ended show). */
+function ensureWatchingStatus(showId){
+  const tr = P().trackedShows[showId];
+  if (tr && tr.status !== 'watching'){
+    tr.status = 'watching'; save();
+    toast(`▶ ${tr.name} moved to Watching`);
+    return true;
+  }
+  return false;
+}
 /* Auto-move to completed once every episode is watched — but only for shows
    TMDB says have ended, so caught-up ongoing shows stay in Watching/Upcoming. */
 async function maybeAutoComplete(showId){
@@ -548,6 +559,7 @@ async function renderShowsUpcoming(seg){
 async function quickWatch(showId, code){
   setWatched(showId, [code], true);
   toast(`✓ ${code} watched`);
+  ensureWatchingStatus(showId);
   await maybeAutoComplete(showId);
   renderShows();
 }
@@ -1056,7 +1068,9 @@ async function toggleEp(showId, seasonN, code){
   await ensureTracked(showId);
   const on = !watchedSet(showId).has(code);
   setWatched(showId, [code], on);
-  if (on && await maybeAutoComplete(showId)){
+  const statusChanged = on && ensureWatchingStatus(showId);
+  const completed = on && await maybeAutoComplete(showId);
+  if (statusChanged || completed){
     const open = [...document.querySelectorAll('.season.open')].map(el => el.id);
     renderShowDetail(showId, await getShow(showId));
     reopenSeasons(showId, open);
@@ -1083,6 +1097,7 @@ async function markSeasonWatched(showId, n){
     if (!codes.length){ toast('No aired episodes in this season'); return; }
     setWatched(showId, codes, true);
     toast(`✓ ${codes.length} episodes watched`);
+    ensureWatchingStatus(showId);
     await maybeAutoComplete(showId);
     const open = [...document.querySelectorAll('.season.open')].map(el => el.id);
     renderShowDetail(showId, await getShow(showId));
