@@ -353,7 +353,28 @@ function renderNav(){
   $('hdr-avatar').textContent = P().emoji;
 }
 function switchTab(id){ currentTab = id; renderNav(); renderTab(); window.scrollTo(0,0); }
-function closeOv(id){ $(id).classList.remove('open'); if (id === 'ov-detail') renderTab(); }
+
+/* Overlays participate in browser history so the phone's back button
+   closes the top screen instead of exiting the app. */
+let ovStack = [];
+function openOverlay(id){
+  if ($(id).classList.contains('open')) return;
+  $(id).classList.add('open');
+  ovStack.push(id);
+  history.pushState({ tvtrak: ovStack.length }, '');
+}
+function doCloseOv(id){
+  $(id).classList.remove('open');
+  if (id === 'ov-detail') renderTab();
+}
+function closeOv(id){
+  if (ovStack[ovStack.length - 1] === id) history.back();      // popstate does the close
+  else { ovStack = ovStack.filter(x => x !== id); doCloseOv(id); }
+}
+window.addEventListener('popstate', () => {
+  const id = ovStack.pop();
+  if (id) doCloseOv(id);
+});
 const FOOTER = `<footer>This product uses the TMDB API but is not endorsed or certified by TMDB.<br>
   <a href="https://www.themoviedb.org" target="_blank" rel="noopener"><span class="tmdb">TMDB</span></a></footer>`;
 function renderTab(){
@@ -721,7 +742,7 @@ function clearAll(){
 let searchTimer, searchSeq = 0;
 const SEARCH_EMPTY = `<div class="empty"><div class="big">🔍</div>Search for any TV show or movie</div>`;
 function openSearch(){
-  $('ov-search').classList.add('open');
+  openOverlay('ov-search');
   const inp = $('search-input');
   inp.value = ''; $('search-results').innerHTML = SEARCH_EMPTY;
   setTimeout(() => inp.focus(), 60);
@@ -755,7 +776,7 @@ async function doSearch(q){
 let detailSeq = 0;
 async function openShow(id){
   const seq = ++detailSeq;
-  $('ov-detail').classList.add('open');
+  openOverlay('ov-detail');
   $('detail-title').textContent = '';
   $('detail-body').innerHTML = `<div class="spinner">Loading…</div>`;
   $('detail-body').scrollTop = 0;
@@ -919,7 +940,7 @@ async function markShowWatched(showId){
 /* ================= Movie detail ================= */
 async function openMovie(id){
   const seq = ++detailSeq;
-  $('ov-detail').classList.add('open');
+  openOverlay('ov-detail');
   $('detail-title').textContent = '';
   $('detail-body').innerHTML = `<div class="spinner">Loading…</div>`;
   $('detail-body').scrollTop = 0;
