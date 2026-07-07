@@ -398,6 +398,9 @@ window.addEventListener('popstate', () => {
   clearTimeout(exitTimer);
   exitTimer = setTimeout(armSentinel, 2000);
 });
+/* Chrome skips history entries pushed without a user gesture, so the boot-time
+   sentinel is ignored by the back button. Arming on taps keeps it gesture-backed. */
+window.addEventListener('pointerdown', armSentinel, { passive:true });
 const FOOTER = `<footer>This product uses the TMDB API but is not endorsed or certified by TMDB.<br>
   <a href="https://www.themoviedb.org" target="_blank" rel="noopener"><span class="tmdb">TMDB</span></a></footer>`;
 function renderTab(){
