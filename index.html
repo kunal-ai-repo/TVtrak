@@ -191,6 +191,13 @@ a{color:var(--blue);text-decoration:none}
 .field label{display:block;font-size:12.5px;font-weight:800;margin-bottom:7px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
 footer{margin-top:36px;padding:18px 0 6px;text-align:center;color:var(--faint);font-size:11.5px;line-height:1.7;border-top:1px solid var(--line)}
 footer .tmdb{font-weight:900;letter-spacing:1.2px;background:linear-gradient(90deg,#90cea1,#01b4e4);-webkit-background-clip:text;background-clip:text;color:transparent;font-size:13px}
+.chips{display:flex;gap:8px;overflow-x:auto;margin:0 -16px 18px;padding:0 16px 4px}
+@media(min-width:900px){.chips{margin:0 0 18px;padding:0 0 4px;flex-wrap:wrap}}
+.chip{flex-shrink:0;background:var(--surface);border-radius:99px;padding:8px 14px;font-weight:700;font-size:12.5px;color:var(--dim);white-space:nowrap}
+.chip:active{background:var(--elev)}
+.seeall{font-size:12px;color:var(--blue);font-weight:800;flex-shrink:0}
+.browse-hd{display:flex;align-items:center;gap:11px;margin-bottom:16px}
+.browse-hd .bt{font-size:17px;font-weight:900;flex:1}
 .res-row{display:flex;gap:12px;background:var(--surface);border-radius:var(--radius);padding:10px;margin-bottom:10px;align-items:center;width:100%}
 .res-row img,.res-row .noimg{width:52px;height:78px;border-radius:9px;object-fit:cover;flex-shrink:0}
 .res-row .rt{font-weight:800;font-size:14.5px}
@@ -364,6 +371,11 @@ function openOverlay(id){
   history.pushState({ tvtrak: ovStack.length }, '');
 }
 function doCloseOv(id){
+  if (id === 'explore-browse'){
+    exploreCat = null; browse = null;
+    if (currentTab === 'explore') renderExplore();
+    return;
+  }
   $(id).classList.remove('open');
   if (id === 'ov-detail') renderTab();
 }
@@ -578,37 +590,139 @@ async function renderMoviesUpcoming(seg){
 }
 
 /* ================= EXPLORE ================= */
-async function renderExplore(){
+const EXPLORE_CATS = [
+  { id:'trend_all',  label:'🔥 Trending',        path:'/trending/all/week' },
+  { id:'foryou',     label:'✨ For You',          special:'foryou', type:'tv' },
+  { id:'trend_tv',   label:'📺 Trending Shows',   path:'/trending/tv/week',  type:'tv' },
+  { id:'pop_tv',     label:'Popular Shows',       path:'/tv/popular',        type:'tv' },
+  { id:'top_tv',     label:'🏆 Top Rated Shows',  path:'/tv/top_rated',      type:'tv' },
+  { id:'onair',      label:'📡 On The Air',       path:'/tv/on_the_air',     type:'tv' },
+  { id:'airing',     label:'📅 Airing Today',     path:'/tv/airing_today',   type:'tv' },
+  { id:'trend_mv',   label:'🎬 Trending Movies',  path:'/trending/movie/week', type:'movie' },
+  { id:'pop_mv',     label:'Popular Movies',      path:'/movie/popular',     type:'movie' },
+  { id:'top_mv',     label:'🏆 Top Rated Movies', path:'/movie/top_rated',   type:'movie' },
+  { id:'now_mv',     label:'🍿 In Theaters',      path:'/movie/now_playing', type:'movie' },
+  { id:'up_mv',      label:'🔜 Upcoming Movies',  path:'/movie/upcoming',    type:'movie' },
+];
+const EXPLORE_HOME_ROWS = ['trend_all','foryou','trend_tv','trend_mv','onair','now_mv','up_mv'];
+let exploreCat = null;   // null = explore home; otherwise a category id being browsed
+let browse = null;       // { page, items, seen, loading, done } for the endless grid
+
+function pcardHTML(r, fallbackType){
+  const type = r.media_type || fallbackType;
+  const name = r.name || r.title, date = r.first_air_date || r.release_date;
+  const mine = type === 'tv' ? !!P().trackedShows[r.id] : !!(P().watchedMovies[r.id] || P().watchlistMovies[r.id]);
+  return `<button class="pcard" onclick="${type==='tv'?'openShow':'openMovie'}(${r.id})">${posterEl(r.poster_path)}
+    <span class="badge ${mine?'gold':''}">${mine ? '✓' : type === 'tv' ? 'TV' : 'MOVIE'}</span>
+    <div class="pname">${esc(name)}</div>
+    <div class="psub">${yearOf(date)}${r.vote_average ? ' · ★ ' + r.vote_average.toFixed(1) : ''}</div></button>`;
+}
+
+async function fetchCat(cat, page){
+  if (cat.special === 'foryou') return fetchForYou(page);
+  const j = await tmdb(cat.path, { page }, `cat:${cat.id}:${page}`);
+  return { results: (j.results || []).filter(r => (r.media_type || cat.type) !== 'person'),
+           done: page >= Math.min(j.total_pages || 1, 500) };
+}
+/* "For You": merged TMDB recommendations seeded by this profile's tracked shows */
+async function fetchForYou(page){
+  const p = P();
+  const seeds = Object.keys(p.trackedShows).slice(-6);
+  if (!seeds.length){
+    const j = await tmdb('/tv/popular', { page }, `cat:pop_tv:${page}`);
+    return { results:(j.results || []).map(r => ({ ...r, media_type:'tv' })), done: page >= Math.min(j.total_pages || 1, 500) };
+  }
+  const key = `foryou:${state.activeProfile}:${seeds.join(',')}:${page}`;
+  if (cache.has(key)) return cache.get(key);
+  const rs = await Promise.all(seeds.map(id =>
+    tmdb(`/tv/${id}/recommendations`, { page }, `rec:${id}:${page}`).catch(() => ({ results:[], total_pages:0 }))));
+  const seen = new Set(), merged = [];
+  let more = false;
+  for (const j of rs){
+    if ((j.total_pages || 0) > page) more = true;
+    for (const r of (j.results || []))
+      if (!seen.has(r.id) && !p.trackedShows[r.id]){ seen.add(r.id); merged.push({ ...r, media_type:'tv' }); }
+  }
+  merged.sort((a,b) => (b.popularity || 0) - (a.popularity || 0));
+  const out = { results: merged, done: !more };
+  cache.set(key, out);
+  return out;
+}
+
+function renderExplore(){
+  exploreCat ? renderBrowse() : renderExploreHome();
+}
+async function renderExploreHome(){
   const m = $('main');
-  m.innerHTML = `<div class="spinner">Loading what's hot…</div>`;
-  const sections = [
-    { title:'🔥 Trending this week', key:'disc:trend', path:'/trending/all/week' },
-    { title:'📡 Shows on the air',   key:'disc:ota',   path:'/tv/on_the_air',     type:'tv' },
-    { title:'📅 Airing today',       key:'disc:today', path:'/tv/airing_today',   type:'tv' },
-    { title:'🍿 Now in theaters',    key:'disc:np',    path:'/movie/now_playing', type:'movie' },
-    { title:'🔜 Upcoming movies',    key:'disc:up',    path:'/movie/upcoming',    type:'movie' },
-  ];
+  const chips = `<div class="chips">${EXPLORE_CATS.map(c =>
+    `<button class="chip" onclick="openBrowse('${c.id}')">${c.label}</button>`).join('')}</div>`;
+  m.innerHTML = chips + `<div class="spinner">Loading what's hot…</div>`;
+  const cats = EXPLORE_HOME_ROWS.map(id => EXPLORE_CATS.find(c => c.id === id));
   try {
-    const data = await Promise.all(sections.map(s => tmdb(s.path, {}, s.key)));
-    if (currentTab !== 'explore') return;
-    let html = '';
-    sections.forEach((s, i) => {
-      const items = (data[i].results || []).filter(r => (r.media_type || s.type) !== 'person').slice(0, 15);
+    const data = await Promise.all(cats.map(c => fetchCat(c, 1).catch(e => ({ err:e }))));
+    if (currentTab !== 'explore' || exploreCat) return;
+    let html = chips;
+    cats.forEach((c, i) => {
+      if (data[i].err){ html += errHTML(data[i].err); return; }
+      const items = (data[i].results || []).slice(0, 15);
       if (!items.length) return;
-      html += `<div class="section"><div class="sec-title">${s.title}</div><div class="hrow">`;
-      for (const r of items){
-        const type = r.media_type || s.type;
-        const name = r.name || r.title, date = r.first_air_date || r.release_date;
-        const mine = type === 'tv' ? !!P().trackedShows[r.id] : !!(P().watchedMovies[r.id] || P().watchlistMovies[r.id]);
-        html += `<button class="pcard" onclick="${type==='tv'?'openShow':'openMovie'}(${r.id})">${posterEl(r.poster_path)}
-          <span class="badge ${mine?'gold':''}">${mine ? '✓' : type === 'tv' ? 'TV' : 'MOVIE'}</span>
-          <div class="pname">${esc(name)}</div><div class="psub">${yearOf(date)}</div></button>`;
-      }
-      html += `</div></div>`;
+      html += `<div class="section"><div class="sec-title">${c.label}
+          <button class="seeall" onclick="openBrowse('${c.id}')">See all ›</button></div>
+        <div class="hrow">${items.map(r => pcardHTML(r, c.type)).join('')}</div></div>`;
     });
     m.innerHTML = html + FOOTER;
-  } catch(e){ m.innerHTML = errHTML(e) + FOOTER; }
+  } catch(e){ m.innerHTML = chips + errHTML(e) + FOOTER; }
 }
+
+function openBrowse(catId){
+  exploreCat = catId;
+  browse = { page:0, items:[], seen:new Set(), loading:false, done:false };
+  ovStack.push('explore-browse');
+  history.pushState({ tvtrak: ovStack.length }, '');
+  window.scrollTo(0,0);
+  renderBrowse();
+  loadMoreBrowse();
+}
+function renderBrowse(){
+  const cat = EXPLORE_CATS.find(c => c.id === exploreCat);
+  $('main').innerHTML = `
+    <div class="browse-hd">
+      <button class="iconbtn" onclick="closeOv('explore-browse')">←</button>
+      <div class="bt">${cat.label}</div>
+    </div>
+    <div class="grid" id="browse-grid">${browse.items.map(r => pcardHTML(r, cat.type)).join('')}</div>
+    <div class="spinner" id="browse-more"></div>`;
+}
+async function loadMoreBrowse(){
+  if (!browse || browse.loading || browse.done) return;
+  browse.loading = true;
+  const cat = EXPLORE_CATS.find(c => c.id === exploreCat);
+  const moreEl = () => $('browse-more');
+  if (moreEl()) moreEl().textContent = 'Loading…';
+  try {
+    const page = browse.page + 1;
+    const { results, done } = await fetchCat(cat, page);
+    browse.page = page;
+    browse.done = done || page >= 500;
+    const fresh = [];
+    for (const r of results){
+      const k = (r.media_type || cat.type) + ':' + r.id;
+      if (browse.seen.has(k)) continue;
+      browse.seen.add(k); browse.items.push(r); fresh.push(r);
+    }
+    if (exploreCat === cat.id && currentTab === 'explore'){
+      const grid = $('browse-grid');
+      if (grid && fresh.length) grid.insertAdjacentHTML('beforeend', fresh.map(r => pcardHTML(r, cat.type)).join(''));
+      if (moreEl()) moreEl().textContent = browse.done ? (browse.items.length ? "· That's everything ·" : 'Nothing here yet') : '';
+      if (!fresh.length && !browse.done){ browse.loading = false; return loadMoreBrowse(); }
+    }
+  } catch(e){ if (moreEl()) moreEl().textContent = '⚠️ ' + (e.message || 'Failed to load'); }
+  browse.loading = false;
+}
+window.addEventListener('scroll', () => {
+  if (currentTab === 'explore' && exploreCat && !$('ov-detail').classList.contains('open') &&
+      document.body.scrollHeight - window.scrollY - window.innerHeight < 800) loadMoreBrowse();
+}, { passive:true });
 
 /* ================= PROFILE ================= */
 let editingProfile = false;
