@@ -63,6 +63,9 @@ a{color:var(--blue);text-decoration:none}
 .section{margin-bottom:26px}
 .sec-title{font-size:16.5px;font-weight:800;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between}
 .sec-title .sub{font-size:12px;color:var(--dim);font-weight:600}
+.sec-title .right{display:flex;align-items:center;gap:9px}
+.viewtog{width:30px;height:30px;border-radius:9px;background:var(--elev);display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--dim);flex-shrink:0}
+.viewtog:active{background:var(--elev2)}
 .cw-card{display:flex;gap:12px;background:var(--surface);border-radius:var(--radius);padding:11px;margin-bottom:12px;align-items:center}
 .cw-card .poster,.cw-card .noimg{width:64px;height:96px;border-radius:10px;object-fit:cover;flex-shrink:0}
 .noimg{background:var(--elev);display:flex;align-items:center;justify-content:center;font-size:22px;color:var(--faint)}
@@ -430,8 +433,7 @@ window.addEventListener('popstate', () => {
 /* Chrome skips history entries pushed without a user gesture, so the boot-time
    sentinel is ignored by the back button. Arming on taps keeps it gesture-backed. */
 window.addEventListener('pointerdown', armSentinel, { passive:true });
-const FOOTER = `<footer>This product uses the TMDB API but is not endorsed or certified by TMDB.<br>
-  <a href="https://www.themoviedb.org" target="_blank" rel="noopener"><span class="tmdb">TMDB</span></a></footer>`;
+const FOOTER = '';
 function renderTab(){
   ({ shows:renderShows, movies:renderMovies, explore:renderExplore, profile:renderProfile })[currentTab]();
 }
@@ -439,6 +441,18 @@ function errHTML(e){ return `<div class="errbox">⚠️ ${esc(e.message || 'Some
 function segHTML(current, items, fn){
   return `<div class="seg">${items.map(([id,label]) =>
     `<button class="${current===id?'on':''}" onclick="${fn}('${id}')">${label}</button>`).join('')}</div>`;
+}
+
+/* Per-section list/tiles preference, persisted */
+function viewOf(key, def){ return (state.viewPrefs || {})[key] || def; }
+function toggleView(key, def){
+  state.viewPrefs = state.viewPrefs || {};
+  state.viewPrefs[key] = viewOf(key, def) === 'tiles' ? 'list' : 'tiles';
+  save(); renderTab();
+}
+function viewBtn(key, def){
+  const v = viewOf(key, def);
+  return `<button class="viewtog" onclick="toggleView('${key}','${def}')" aria-label="Toggle view">${v === 'tiles' ? '☰' : '⊞'}</button>`;
 }
 
 /* ================= SHOWS tab ================= */
@@ -500,27 +514,45 @@ async function renderShowsWatchlist(seg){
           <div class="prog-lbl">${r.watchedAired}/${r.aired.length} episodes · ${pct}%${staleDays ? ` · <span style="color:var(--amber,#f59e0b)">zzz ${staleDays}d ago</span>` : ''}</div>
         </div>${btn}</div>`;
     };
+    const cwTile = r => {
+      const show = t[r.id];
+      if (r.err) return '';
+      const pct = r.aired.length ? Math.round(r.watchedAired / r.aired.length * 100) : 0;
+      return `<button class="pcard" onclick="openShow(${r.id})">${posterEl(show.poster)}
+        ${r.next ? `<span class="badge gold">${epLabel(r.next.s, r.next.e)}</span>` : ''}
+        <div class="pname">${esc(show.name)}</div>
+        <div class="psub">${r.watchedAired}/${r.aired.length} · ${pct}%</div>
+        <div class="prog" style="margin-top:5px"><i style="width:${pct}%"></i></div></button>`;
+    };
+    const secCW = (key, title, list) => {
+      if (!list.length) return '';
+      const v = viewOf(key, 'list');
+      const body = v === 'list' ? list.map(cwCard).join('') : `<div class="grid">${list.map(cwTile).join('')}</div>`;
+      return `<div class="section"><div class="sec-title">${title}
+        <span class="right"><span class="sub">${list.length}</span>${viewBtn(key, 'list')}</span></div>${body}</div>`;
+    };
     const active = rows.filter(r => !isStale(r));
     const stale = rows.filter(isStale).sort((a,b) => lastActivity(a.id) - lastActivity(b.id));
-    if (active.length)
-      watchingHTML += `<div class="section"><div class="sec-title">Watching <span class="sub">${active.length}</span></div>${active.map(cwCard).join('')}</div>`;
-    if (stale.length)
-      watchingHTML += `<div class="section"><div class="sec-title">😴 Haven't watched for a while <span class="sub">${stale.length}</span></div>${stale.map(cwCard).join('')}</div>`;
+    watchingHTML += secCW('sh.watching', 'Watching', active);
+    watchingHTML += secCW('sh.stale', "😴 Haven't watched for a while", stale);
   }
   let html = seg + watchingHTML;
-  const gridSec = (title, list, subline) => {
+  const gridSec = (key, title, list) => {
     if (!list.length) return '';
-    let h = `<div class="section"><div class="sec-title">${title} <span class="sub">${list.length}</span></div><div class="grid">`;
-    for (const id of list.sort((a,b) => t[a].name.localeCompare(t[b].name))){
-      const w = (P().watchedEpisodes[id] || []).length;
-      h += `<button class="pcard" onclick="openShow(${id})">${posterEl(t[id].poster)}
-        <div class="pname">${esc(t[id].name)}</div><div class="psub">${subline === 'eps' ? (w ? w + ' eps watched' : 'Not started') : ''}</div></button>`;
-    }
-    return h + `</div></div>`;
+    list.sort((a,b) => t[a].name.localeCompare(t[b].name));
+    const v = viewOf(key, 'tiles');
+    const sub = id => { const w = (P().watchedEpisodes[id] || []).length; return w ? w + ' eps watched' : 'Not started'; };
+    const body = v === 'tiles'
+      ? `<div class="grid">${list.map(id => `<button class="pcard" onclick="openShow(${id})">${posterEl(t[id].poster)}
+          <div class="pname">${esc(t[id].name)}</div><div class="psub">${sub(id)}</div></button>`).join('')}</div>`
+      : list.map(id => `<button class="res-row" onclick="openShow(${id})">${posterEl(t[id].poster, '')}
+          <div style="flex:1;min-width:0"><div class="rt">${esc(t[id].name)}</div><div class="rm">${sub(id)}</div></div></button>`).join('');
+    return `<div class="section"><div class="sec-title">${title}
+      <span class="right"><span class="sub">${list.length}</span>${viewBtn(key, 'tiles')}</span></div>${body}</div>`;
   };
-  html += gridSec('Watch Next', planned, 'eps');
-  html += gridSec('Completed', completed, '');
-  html += gridSec('Dropped', dropped, '');
+  html += gridSec('sh.planned', 'Watch Next', planned);
+  html += gridSec('sh.completed', 'Completed', completed);
+  html += gridSec('sh.dropped', 'Dropped', dropped);
   if (!watching.length && !planned.length && !completed.length && !dropped.length)
     html += `<div class="empty"><div class="big">📺</div>Nothing here yet.</div>`;
   $('main').innerHTML = html + FOOTER;
@@ -588,27 +620,25 @@ function renderMoviesWatchlist(seg){
       <button class="btn primary" onclick="openSearch()">🔍 Find movies</button></div>` + FOOTER;
     return;
   }
+  const mvSec = (key, title, entries, badge, sub) => {
+    if (!entries.length) return '';
+    const v = viewOf(key, 'tiles');
+    const body = v === 'tiles'
+      ? `<div class="grid">${entries.map(([id, mv]) => `<button class="pcard" onclick="openMovie(${id})">${posterEl(mv.poster)}
+          ${badge(mv)}<div class="pname">${esc(mv.title)}</div><div class="psub">${sub(mv)}</div></button>`).join('')}</div>`
+      : entries.map(([id, mv]) => `<button class="res-row" onclick="openMovie(${id})">${posterEl(mv.poster, '')}
+          <div style="flex:1;min-width:0"><div class="rt">${esc(mv.title)}</div>
+          <div class="rm">${sub(mv)}${mv.rating ? ' · <b style="color:var(--accent)">★ ' + mv.rating + '</b>' : ''}</div></div></button>`).join('');
+    return `<div class="section"><div class="sec-title">${title}
+      <span class="right"><span class="sub">${entries.length}</span>${viewBtn(key, 'tiles')}</span></div>${body}</div>`;
+  };
   let html = seg;
-  if (wl.length){
-    html += `<div class="section"><div class="sec-title">Watchlist <span class="sub">${wl.length}</span></div><div class="grid">`;
-    for (const [id, mv] of wl){
-      const unreleased = mv.releaseDate && mv.releaseDate > todayStr();
-      html += `<button class="pcard" onclick="openMovie(${id})">${posterEl(mv.poster)}
-        ${unreleased ? `<span class="badge">SOON</span>` : ''}
-        <div class="pname">${esc(mv.title)}</div>
-        <div class="psub">${mv.releaseDate ? yearOf(mv.releaseDate) : ''}</div></button>`;
-    }
-    html += `</div></div>`;
-  }
-  if (wd.length){
-    html += `<div class="section"><div class="sec-title">Watched <span class="sub">${wd.length}</span></div><div class="grid">`;
-    for (const [id, mv] of wd)
-      html += `<button class="pcard" onclick="openMovie(${id})">${posterEl(mv.poster)}
-        ${mv.rating ? `<span class="badge gold">★ ${mv.rating}</span>` : ''}
-        <div class="pname">${esc(mv.title)}</div>
-        <div class="psub">${fmtDate((mv.watchedAt||'').slice(0,10))}</div></button>`;
-    html += `</div></div>`;
-  }
+  html += mvSec('mv.list', 'Watchlist', wl,
+    mv => (mv.releaseDate && mv.releaseDate > todayStr()) ? `<span class="badge">SOON</span>` : '',
+    mv => mv.releaseDate ? yearOf(mv.releaseDate) : '');
+  html += mvSec('mv.watched', 'Watched', wd,
+    mv => mv.rating ? `<span class="badge gold">★ ${mv.rating}</span>` : '',
+    mv => fmtDate((mv.watchedAt || '').slice(0, 10)));
   m.innerHTML = html + FOOTER;
 }
 async function renderMoviesUpcoming(seg){
@@ -736,14 +766,27 @@ function openBrowse(catId){
   renderBrowse();
   loadMoreBrowse();
 }
+function browseRowHTML(r, fallbackType){
+  const type = r.media_type || fallbackType;
+  const name = r.name || r.title, date = r.first_air_date || r.release_date;
+  const mine = type === 'tv' ? !!P().trackedShows[r.id] : !!(P().watchedMovies[r.id] || P().watchlistMovies[r.id]);
+  return `<button class="res-row" onclick="${type==='tv'?'openShow':'openMovie'}(${r.id})">${posterEl(r.poster_path, '')}
+    <div style="flex:1;min-width:0"><div class="rt">${esc(name)}</div>
+    <div class="rm">${type === 'tv' ? '📺' : '🎬'} ${yearOf(date)}${r.vote_average ? ' · ★ ' + r.vote_average.toFixed(1) : ''}${mine ? ' · <b style="color:var(--accent)">✓</b>' : ''}</div></div></button>`;
+}
+function browseItemHTML(r, cat){
+  return viewOf('explore.browse', 'tiles') === 'tiles' ? pcardHTML(r, cat.type) : browseRowHTML(r, cat.type);
+}
 function renderBrowse(){
   const cat = EXPLORE_CATS.find(c => c.id === exploreCat);
+  const tiles = viewOf('explore.browse', 'tiles') === 'tiles';
   $('main').innerHTML = `
     <div class="browse-hd">
       <button class="iconbtn" onclick="closeOv('explore-browse')">←</button>
       <div class="bt">${cat.label}</div>
+      ${viewBtn('explore.browse', 'tiles')}
     </div>
-    <div class="grid" id="browse-grid">${browse.items.map(r => pcardHTML(r, cat.type)).join('')}</div>
+    <div class="${tiles ? 'grid' : ''}" id="browse-grid">${browse.items.map(r => browseItemHTML(r, cat)).join('')}</div>
     <div class="spinner" id="browse-more"></div>`;
 }
 async function loadMoreBrowse(){
@@ -765,7 +808,7 @@ async function loadMoreBrowse(){
     }
     if (exploreCat === cat.id && currentTab === 'explore'){
       const grid = $('browse-grid');
-      if (grid && fresh.length) grid.insertAdjacentHTML('beforeend', fresh.map(r => pcardHTML(r, cat.type)).join(''));
+      if (grid && fresh.length) grid.insertAdjacentHTML('beforeend', fresh.map(r => browseItemHTML(r, cat)).join(''));
       if (moreEl()) moreEl().textContent = browse.done ? (browse.items.length ? "· That's everything ·" : 'Nothing here yet') : '';
       if (!fresh.length && !browse.done){ browse.loading = false; return loadMoreBrowse(); }
     }
