@@ -383,9 +383,20 @@ function closeOv(id){
   if (ovStack[ovStack.length - 1] === id) history.back();      // popstate does the close
   else { ovStack = ovStack.filter(x => x !== id); doCloseOv(id); }
 }
+/* Exit guard: a sentinel history entry sits below the overlays. Consuming it
+   (back on a main tab) warns instead of exiting; it re-arms after 2s, so a
+   second back inside that window reaches the end of history and closes the app. */
+let hasSentinel = false, exitTimer;
+function armSentinel(){
+  if (!hasSentinel && !ovStack.length){ history.pushState({ tvtrak:'sentinel' }, ''); hasSentinel = true; }
+}
 window.addEventListener('popstate', () => {
   const id = ovStack.pop();
-  if (id) doCloseOv(id);
+  if (id){ doCloseOv(id); armSentinel(); return; }
+  hasSentinel = false;
+  toast('Press back again to exit');
+  clearTimeout(exitTimer);
+  exitTimer = setTimeout(armSentinel, 2000);
 });
 const FOOTER = `<footer>This product uses the TMDB API but is not endorsed or certified by TMDB.<br>
   <a href="https://www.themoviedb.org" target="_blank" rel="noopener"><span class="tmdb">TMDB</span></a></footer>`;
@@ -1121,6 +1132,7 @@ async function toggleWatchlist(id){
 /* ================= Boot ================= */
 renderNav();
 renderTab();
+armSentinel();
 if ('serviceWorker' in navigator && location.protocol === 'https:')
   navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
