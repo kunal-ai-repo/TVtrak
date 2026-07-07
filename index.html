@@ -335,6 +335,23 @@ function setWatched(showId, codes, on){
   if (set.size) P().watchedEpisodes[showId] = [...set]; else delete P().watchedEpisodes[showId];
   save();
 }
+/* Auto-move to completed once every episode is watched — but only for shows
+   TMDB says have ended, so caught-up ongoing shows stay in Watching/Upcoming. */
+async function maybeAutoComplete(showId){
+  const tr = P().trackedShows[showId];
+  if (!tr || tr.status === 'completed') return false;
+  try {
+    const show = await getShow(showId);
+    if (show.status !== 'Ended' && show.status !== 'Canceled') return false;
+    const pr = await showProgress(showId);
+    if (pr.aired.length && !pr.next && !pr.upcoming.length){
+      tr.status = 'completed'; save();
+      toast(`🏁 ${tr.name} completed!`);
+      return true;
+    }
+  } catch(e){}
+  return false;
+}
 async function showProgress(id){
   const eps = await allEpisodes(id, state.includeSpecials);
   const watched = watchedSet(id);
@@ -531,6 +548,7 @@ async function renderShowsUpcoming(seg){
 async function quickWatch(showId, code){
   setWatched(showId, [code], true);
   toast(`✓ ${code} watched`);
+  await maybeAutoComplete(showId);
   renderShows();
 }
 
@@ -987,8 +1005,22 @@ function untrackShow(id){
   delete P().trackedShows[id]; delete P().watchedEpisodes[id]; save();
   toast('Removed'); getShow(id).then(s => renderShowDetail(id, s));
 }
-function changeShowStatus(id, status){
-  if (P().trackedShows[id]){ P().trackedShows[id].status = status; save(); toast('Moved to ' + status); }
+async function changeShowStatus(id, status){
+  const tr = P().trackedShows[id];
+  if (!tr) return;
+  tr.status = status; save();
+  if (status === 'completed'){
+    try {
+      const eps = await allEpisodes(id, state.includeSpecials);
+      const today = todayStr();
+      const codes = eps.filter(e => e.air && e.air <= today).map(e => epCode(e.s, e.e));
+      setWatched(id, codes, true);
+      toast(`🏁 Completed — ${codes.length} episodes marked watched`);
+      const open = [...document.querySelectorAll('.season.open')].map(el => el.id);
+      renderShowDetail(id, await getShow(id));
+      reopenSeasons(id, open);
+    } catch(e){ toast('⚠️ ' + e.message); }
+  } else toast('Moved to ' + status);
 }
 async function toggleSeason(showId, n){
   const box = $(`season-${n}`);
@@ -1024,6 +1056,12 @@ async function toggleEp(showId, seasonN, code){
   await ensureTracked(showId);
   const on = !watchedSet(showId).has(code);
   setWatched(showId, [code], on);
+  if (on && await maybeAutoComplete(showId)){
+    const open = [...document.querySelectorAll('.season.open')].map(el => el.id);
+    renderShowDetail(showId, await getShow(showId));
+    reopenSeasons(showId, open);
+    return;
+  }
   const sd = await getSeason(showId, seasonN);
   renderSeasonEps(showId, seasonN, sd);
   fillDetailProgress(showId);
@@ -1045,6 +1083,7 @@ async function markSeasonWatched(showId, n){
     if (!codes.length){ toast('No aired episodes in this season'); return; }
     setWatched(showId, codes, true);
     toast(`✓ ${codes.length} episodes watched`);
+    await maybeAutoComplete(showId);
     const open = [...document.querySelectorAll('.season.open')].map(el => el.id);
     renderShowDetail(showId, await getShow(showId));
     reopenSeasons(showId, open);
