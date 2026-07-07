@@ -333,6 +333,7 @@ function setWatched(showId, codes, on){
   const set = watchedSet(showId);
   for (const c of codes) on ? set.add(c) : set.delete(c);
   if (set.size) P().watchedEpisodes[showId] = [...set]; else delete P().watchedEpisodes[showId];
+  if (on && P().trackedShows[showId]) P().trackedShows[showId].lastWatchedAt = new Date().toISOString();
   save();
 }
 /* Watching an episode of a planned/completed/dropped show pulls it back into Watching
@@ -473,10 +474,12 @@ async function renderShowsWatchlist(seg){
       const an = a.next ? (a.next.air||'9999') : '9999', bn = b.next ? (b.next.air||'9999') : '9999';
       return an < bn ? -1 : an > bn ? 1 : 0;
     });
-    watchingHTML = `<div class="section"><div class="sec-title">Watching <span class="sub">${watching.length}</span></div>`;
-    for (const r of rows){
+    const STALE_MS = 30 * 86400000;
+    const lastActivity = id => Date.parse(t[id].lastWatchedAt || t[id].addedAt || '') || Date.now();
+    const isStale = r => !r.err && r.next && (Date.now() - lastActivity(r.id)) > STALE_MS;
+    const cwCard = r => {
       const show = t[r.id];
-      if (r.err){ watchingHTML += errHTML(r.err); continue; }
+      if (r.err) return errHTML(r.err);
       const pct = r.aired.length ? Math.round(r.watchedAired / r.aired.length * 100) : 0;
       let epLine, btn = '';
       if (r.next){
@@ -487,16 +490,22 @@ async function renderShowsWatchlist(seg){
       } else {
         epLine = `Caught up · no upcoming episodes`;
       }
-      watchingHTML += `<div class="cw-card" onclick="openShow(${r.id})">
+      const staleDays = isStale(r) ? Math.floor((Date.now() - lastActivity(r.id)) / 86400000) : 0;
+      return `<div class="cw-card" onclick="openShow(${r.id})">
         ${posterEl(show.poster)}
         <div class="info">
           <div class="show">${esc(show.name)}</div>
           <div class="ep">${epLine}</div>
           <div class="prog"><i style="width:${pct}%"></i></div>
-          <div class="prog-lbl">${r.watchedAired}/${r.aired.length} episodes · ${pct}%</div>
+          <div class="prog-lbl">${r.watchedAired}/${r.aired.length} episodes · ${pct}%${staleDays ? ` · <span style="color:var(--amber,#f59e0b)">zzz ${staleDays}d ago</span>` : ''}</div>
         </div>${btn}</div>`;
-    }
-    watchingHTML += `</div>`;
+    };
+    const active = rows.filter(r => !isStale(r));
+    const stale = rows.filter(isStale).sort((a,b) => lastActivity(a.id) - lastActivity(b.id));
+    if (active.length)
+      watchingHTML += `<div class="section"><div class="sec-title">Watching <span class="sub">${active.length}</span></div>${active.map(cwCard).join('')}</div>`;
+    if (stale.length)
+      watchingHTML += `<div class="section"><div class="sec-title">😴 Haven't watched for a while <span class="sub">${stale.length}</span></div>${stale.map(cwCard).join('')}</div>`;
   }
   let html = seg + watchingHTML;
   const gridSec = (title, list, subline) => {
